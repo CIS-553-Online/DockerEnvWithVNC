@@ -1,0 +1,168 @@
+# #######################################################################################################
+#
+# This Dockerfile is used to build an headless vnc image based on Ubuntu for CIS553 projects
+# How to build: 
+#   docker build -f Dockerfile-cis553vnc --progress plain  -t cis553vnc . 
+#
+# How to instantiate:
+# For VNC access with CIS553 userId and 
+# For Container access directly
+#
+#   docker-compose -f docker-compose-cis553vnc.yml run  -u cis553 -d -p 5911:5901 -p 6911:6901  -e VNC_RESOLUTION=2560x1440 --name=cis553container --rm cis553vnc tail -f /dev/null
+#
+# If you would use VNC viewer, then you may ignore following steps
+#   
+##### For X11-Forwarding: To access to the container directly and use X11 forwarding. 
+##### [powershell] set-variable -name DISPLAY -value 192.168.10.193:0.0         <-- 192.168.10.193 is the host IP address here
+##### [powershell] docker exec -it container_id /bin/bash    			 	 	<-- access to the container
+#
+##### Then run the command above. And run following command in the terminal in the container
+##### export DISPLAY=192.168.10.193:0.0        <-- 192.168.10.193 is the host IP address here
+##### test with this command if X11 forwarding works:  xeyes
+#
+# Password:: root and cis553 user account password is mcit
+##########################################################################################################
+
+FROM ubuntu:20.04
+
+## Connection ports for controlling the UI:
+# VNC port:5901
+# noVNC webport, connect via http://IP:6901/?password=mcit
+ENV DISPLAY=:1 \
+    VNC_PORT=5901 \
+    NO_VNC_PORT=6901
+EXPOSE $VNC_PORT $NO_VNC_PORT
+
+### Envrionment config
+ENV HOME=/headless \
+    TERM=xterm \
+    STARTUPDIR=/dockerstartup \
+    INST_SCRIPTS=/headless/install \
+    NO_VNC_HOME=/headless/noVNC \
+    DEBIAN_FRONTEND=noninteractive \
+    VNC_COL_DEPTH=24 \
+    VNC_RESOLUTION=1600x1200 \
+    VNC_PW=mcit \
+    VNC_VIEW_ONLY=false
+WORKDIR $HOME
+
+ADD ./resources/scripts/ $INST_SCRIPTS/
+RUN find $INST_SCRIPTS -name '*.sh' -exec chmod a+x {} +
+
+RUN \
+apt-get update && \
+apt-get install -y vim wget net-tools locales bzip2 \
+    python-numpy #used for websockify/novnc
+RUN apt-get clean -y
+
+RUN echo "generate locales en_US.UTF-8"
+RUN locale-gen en_US.UTF-8
+ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
+COPY ./resources/tigervnc-1.10.1.x86_64.tar.gz $HOME/.
+RUN tar xf $HOME/tigervnc-1.10.1.x86_64.tar.gz --strip 1 -C /
+RUN $INST_SCRIPTS/no_vnc.sh
+RUN apt-get install -y firefox
+
+### Install Sublime-Text
+COPY ./resources/sublime_text_build_4126_x64.tar.gz $HOME/.
+RUN tar xf $HOME/sublime_text_build_4126_x64.tar.gz --strip 1 -C /opt/
+
+### Install xfce UI
+RUN $INST_SCRIPTS/xfce_ui.sh
+ADD ./resources/xfce/ $HOME/
+
+# Remove diverted man binary to prevent man-pages being replaced with "minimized" message.
+# https://github.com/CIS380/docker-env/wiki/Install-man-page
+RUN if  [ "$(dpkg-divert --truename /usr/bin/man)" = "/usr/bin/man.REAL" ]; then \
+        rm -f /usr/bin/man; \
+        dpkg-divert --quiet --remove --rename /usr/bin/man; \
+    fi
+
+RUN sed -i 's,^path-exclude=/usr/share/man/,#path-exclude=/usr/share/man/,' /etc/dpkg/dpkg.cfg.d/excludes
+
+RUN \
+apt-get update && \
+apt-get upgrade -y && \
+apt-get install -y software-properties-common && \
+apt-get install -y clang && \
+apt-get install -y emacs && \
+apt-get install -y gdb && \
+apt-get install -y gcc && \
+apt-get install -y make && \
+apt-get install -y valgrind && \
+apt-get install -y vim && \
+apt-get install -y python3 && \
+apt-get install -y python3-pip &&\
+apt-get install -y wget && \
+apt-get install -y lsb-release && \
+apt-get install -y net-tools && \
+apt-get install -y apt-transport-https apt-utils && \
+apt-get install -y man man-db manpages-posix manpages-dev manpages-posix-dev && \
+apt-get install -y libssl-dev && \
+apt-get install -y sudo && \
+rm -rf /var/lib/apt/lists/*
+
+RUN apt install -y g++-9 gcc-9
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 --slave /usr/bin/g++ g++ /usr/bin/g++-9 --slave /usr/bin/gcov gcov /usr/bin/gcov-9
+
+RUN \
+apt-get update && \
+apt-get -y install default-jre && \
+apt-get -y install git-core && \
+apt-get install -y g++ && \
+apt-get install -y git
+
+RUN \
+apt-get update && \
+apt-get install -y bzr && \
+apt-get install -y tcpdump && \
+apt-get install -y autoconf && \
+apt-get install -y cvs && \
+apt-get install -y unrar
+RUN \
+apt-get update && \
+apt-get install -y zip && \
+apt-get install -y unzip && \
+apt-get install -y tcptrace && \
+apt-get install -y traceroute
+
+RUN apt-get update && \
+apt-get install -y openssh-server && \
+apt-get install xauth && \
+apt-get install -y iputils-ping && \
+apt-get install -qqy x11-apps
+
+RUN apt-get install -y qt5-default
+
+RUN mkdir /var/run/sshd
+RUN sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+# SSH login fix. Otherwise user is kicked off after login
+RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
+# Set root passwd 
+RUN echo 'root:mcit' | chpasswd
+
+# Add user so that container does not run as root 
+ARG GID=1000
+ARG UID=1000
+RUN addgroup --gid $GID cis553
+
+RUN useradd --system --create-home --shell /bin/bash --groups sudo -p "$(openssl passwd -1 mcit)" --uid $UID --gid $GID cis553
+
+# If there was an access problem then following three linses could be commented out
+RUN wget -O /root/.vimrc https://raw.githubusercontent.com/CIS548/gists/master/example_vimrc.txt
+RUN cp /root/.vimrc /home/cis553/.vimrc
+RUN chown cis553:cis553 /home/cis553/.vimrc
+
+RUN echo "cis553:mcit" | chpasswd 
+RUN usermod -aG sudo cis553 
+
+### configure startup
+RUN $INST_SCRIPTS/libnss_wrapper.sh
+ADD ./resources/startup $STARTUPDIR
+RUN $INST_SCRIPTS/set_user_permission.sh $STARTUPDIR $HOME
+
+ENTRYPOINT ["/dockerstartup/vnc_startup.sh"]
+WORKDIR /home/cis553/
+
+RUN service ssh start
+EXPOSE 22
